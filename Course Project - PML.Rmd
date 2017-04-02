@@ -1,0 +1,102 @@
+---
+title: "Course Project - PML"
+author: "J Hudlow"
+date: "April 1, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Weight Lifting Exercise Prediction
+
+This project aims to predict the manner in which various weightlifting exercises were done using data from accelerometers that are commonly used in Human Activity Recognition studies. The outcomes we are trying to predict fall into one of five categories or classes, which include Class A for correctly completed exercises, and Classes B-E for exercises that are completed incorrectly in different ways. We begin by examining the training data:
+
+```{r pml}
+library(caret)
+library(AppliedPredictiveModeling)
+setwd("C:/Users/RandA/Downloads")
+pml_train <- read.csv("pml-training.csv")
+dim(pml_train)
+summary(pml_train)
+```
+
+We can see that there are 160 variables and more than 19,000 observations. We want to reduce the number of variables by removing ones that are not likely to be helpful for predicting Classe outcomes so we can begin applying Machine Learning algorithms to the rest of the data. We can see from the summary above that there are a number of variables with zero or near zero variance, and others with a very high number of NA values. We can get rid of these columns first:
+
+```{r}
+badcols <- nearZeroVar(pml_train)
+pml_train2 <- pml_train[,-badcols]
+colswithoutNAs <- colMeans(is.na(pml_train2)) <.97
+pml_train3 <- pml_train2[,colswithoutNAs]
+dim(pml_train3)
+```
+
+We still have 58 variables which is quite a few with this many observations, so next we will remove variables that are collinear, along with the first five columns which contain timestamps and other variables we don't want included for prediction:
+
+```{r}
+tmp <- cor(pml_train3[6:58])
+tmp[upper.tri(tmp)] <- 0
+diag(tmp) <- 0
+pml_train4 <- pml_train3[,!apply(tmp,2,function(x) any(x > 0.8))]
+pml_train5 <- pml_train4[6:48]
+dim(pml_train5)
+```
+
+Now that we've gotten rid of the highly correlated variables and the others that we didn't want we can try to begin doing some model training on them, but since the dataset is still very large we will begin with a small subtraining set of 5%:
+
+```{r}
+inTrain1 <- createDataPartition(pml_train5$classe, p = 1/20)[[1]]
+subtrain1 <- pml_train5[ inTrain1,]
+subtest1 <- pml_train5[ -inTrain1,]
+```
+
+In order to allow for cross-validation we've partitioned our training set into smaller subtraining and subtesting sets. We can now try several MLAs on the subtraining set and test them on the subtest set to see how they perform.
+
+```{r}
+rffit <- train(classe ~ ., data = subtrain1, method = "rf")
+gbmfit <- train(classe ~ ., data = subtrain1, method = "gbm", verbose = FALSE)
+ldafit <- train(classe ~ ., data = subtrain1, method = "lda")
+prffit <- predict(rffit,subtest1)
+pgbmfit <- predict(gbmfit,subtest1)
+pldafit <- predict(ldafit,subtest1)
+confusionMatrix(prffit,subtest1$classe)
+confusionMatrix(pgbmfit,subtest1$classe)
+confusionMatrix(pldafit,subtest1$classe)
+```
+
+We can see that the Random Forest algorithm has performed best, but it's likely that we still have too many variables. It's difficult to see all of them together in a plot since there are so many, but we can take a look at a few plotted against eacother and the classe outcome to try to get an idea of which are most important:
+
+```{r}
+featurePlot(x=pml_train5[,c("gyros_forearm_z","gyros_dumbbell_y","accel_belt_z","magnet_belt_z","classe")],y=pml_train5$classe, plot = "pairs")
+```
+
+While a little separation is visible between the different classes, it's difficult to distinguish visually which predictors may be most relevant for this dataset (plots were done for all of the other variables as well but were not included here due to space limitations).
+Another way to further reduce the number of variables being used is by ranking variables by their importance in our initial Random Forest model fit and only keep those with high importance:
+
+```{r}
+ImpM <- data.frame(varImp(rffit)$importance)
+ImpM$Vars <- row.names(ImpM)
+ImpM[order(-ImpM$Overall),][1:13,]
+impcols <- data.frame(ImpM[order(-ImpM$Overall),][1:13,])[,2]
+pml_train6 <- pml_train5[,impcols]
+pml_train6$classe <- pml_train5$classe
+```
+
+Now we are down to 13 predictor variables and can establish a new subtraining and subtest set from the original training set using only these variables, again using a smaller subtraining set than usual since there are such a large number of observations for Random Forest. 
+
+```{r}
+inTrain2 <- createDataPartition(pml_train6$classe, p = 1/4)[[1]]
+subtrain2 <- pml_train6[ inTrain2,]
+subtest2 <- pml_train6[ -inTrain2,]
+```
+
+We can then fit the Random Forest model again and compare the results:
+
+```{r}
+rffit2 <- train(classe ~ ., data = subtrain2, method = "rf")
+prffit2 <- predict(rffit2, subtest2)
+confusionMatrix(prffit2, subtest2$classe)
+```
+
+According to the confusion matrix comparing the predictions and actual subtest values, this model has an accuracy rate of about 95%. Since cross validation was used, the out of sample error rate is expected to be around 5%. The Random Forest algorithm was chosen because of it's accuracy, and it's suitability on this dataset was confirmed by a comparison against several other machine learning algorithms. 
